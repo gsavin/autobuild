@@ -13,6 +13,20 @@ git repository using Maven.
    - build the package
    - send the package on a remote host
 
+It uses a configuration file parsed by configparser. Default
+section 'config' should contains :
+
+| [config]
+| user = login
+| host = hostname
+| remote = remote directory
+| modules = mod1,mod2,...
+
+Then each module should have its own section:
+
+| [mod1]
+| path = path/to/mod1/repository
+
 Author: Guilhelm Savin
 """
 
@@ -31,7 +45,7 @@ def execute(args):
     the command is returned.
     """
     out = subprocess.check_output(args)
-    return out
+    return out.decode('utf-8')
 
 def get_commit(config, module):
     """
@@ -63,6 +77,9 @@ def has_changed(config, module):
         cache = ConfigParser()
         cache.read(cache_path)
         
+        if not module in cache:
+            return True
+        
         previous_commit = cache.get(module, 'commit')
         current_commit = get_commit(config, module)
 
@@ -81,9 +98,12 @@ def update_cache(config, module):
     
     if os.path.exists(cache_path):
         cache.read(cache_path)
-        
+    
+    if not module in cache:
+        cache[module] = {}
+
     commit = get_commit(config, module)
-    cache.set(module, 'commit', commit)
+    cache[module]['commit'] = commit
     
     out = open(cache_path, 'w')
     cache.write(out)
