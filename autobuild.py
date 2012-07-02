@@ -1,7 +1,7 @@
 #!/usr/bin/python3.2
 # -*- coding: utf-8 -*-
 
-import os, re, subprocess, sys
+import os, re, subprocess, sys, time
 from configparser import ConfigParser, ExtendedInterpolation
 import smtplib
 from email.mime.text import MIMEText
@@ -179,13 +179,7 @@ def build(config, module):
 
 	execute(args)
 
-def get_jar_name(config, module):
-	"""
-	Estimate the jar name of the module package. This
-	is done by reading the first value of 'artifactId'
-	and 'version' in 'pom.xml'. Jar name will be :
-	'path/to/repository/target/artifactId-version.jar'.
-	"""
+def get_pom_infos(config, module):
 	pom = os.path.join(config.get(module, 'path'), 'pom.xml')
 	fpom = open(pom, 'r')
 	cpom = fpom.read()
@@ -193,6 +187,18 @@ def get_jar_name(config, module):
 	
 	artifactId = re.search('<artifactId>(.*)</artifactId>', cpom).group(1)
 	version = re.search('<version>(.*)</version>', cpom).group(1)
+	
+	yield artifactId
+	yield version
+
+def get_jar_name(config, module):
+	"""
+	Estimate the jar name of the module package. This
+	is done by reading the first value of 'artifactId'
+	and 'version' in 'pom.xml'. Jar name will be :
+	'path/to/repository/target/artifactId-version.jar'.
+	"""
+	artifactId, version = get_pom_infos(config, module)
 
 	jar = "%s-%s.jar" % (artifactId, version)
 	jar = os.path.join("target/", jar)
@@ -200,20 +206,37 @@ def get_jar_name(config, module):
 
 	return jar
 
+def get_timestamp(config):
+    format = '%Y%m%d-%H%M'
+
+    if 'timestamp_format' in config['config']:
+        format = config['config']['timestamp_format']
+
+    return time.strftime(format, time.gmtime())
+
 def upload(config, module):
-	"""
-	Send the package jar to the remote host.
-	"""
-	user = config.get('config', 'user')
-	host = config.get('config', 'host')
-	remo = config.get('config', 'remote')
+    """
+    Send the package jar to the remote host.
+    """
+    user = config.get('config', 'user')
+    host = config.get('config', 'host')
+    remo = config.get('config', 'remote')
 
-	args = []
-	args.append('scp')
-	args.append(get_jar_name(config, module))
-	args.append("{0}@{1}:{2}".format(user, host, remo))
+    jarname = get_jar_name(config, module)
+    dstname = os.path.basename(jarname)
+    
+    if 'timestamp' in config['config'] and config['config'].getboolean('timestamp'):
+        artifactId, version = get_pom_infos(config, module)
+        dstname = "%s-%s-%s.jar" % (artifactId, version, get_timestamp(config))
 
-	execute(args)
+    remo = os.path.join(remo, dstname)
+
+    args = []
+    args.append('scp')
+    args.append(jarname)
+    args.append("{0}@{1}:{2}".format(user, host, remo))
+
+    execute(args)
 
 def check_config(config):
 	"""
@@ -274,6 +297,17 @@ def run(config_path):
 			except subprocess.CalledProcessError as e:
 				print('fail to build', module, ":", e)
 				errors.append("- Failed to build %s : %s" % (module, e))
+	
+	if 'hooks' in config and 'rpost' in config['hooks']:
+		user = config['config']['user']
+		host = config['config']['host']
+		args = ['ssh', "%s@%s" % (user, host), config['hooks']['rpost']]
+		
+		try:
+			execute(args)
+		except subprocess.CalledProcessError as e:
+			print('fail to execute remote post hook:', repr(e))
+			errors.append('- Failed to execute remote post hook: %s' % repr(e))
 	
 	if len(errors) > 0:
 		message = "Autobuild has raised some errors :\n"
